@@ -1,0 +1,26 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+    - echo "Installing Dependencies..."
+    - cd lambdafunction
+    - pip install -r requirements.txt -t python/ 
+    - cd ..
+  build: 
+    commands:
+      - echo "Zipping Media Service Deployment Package"
+      - cd lambdafunction
+      - zip -r ../media_service_build_package.zip lambda_function.py
+      - zip -r ../dependency_layer.zip python/
+      - cd ..
+  post_build: 
+    commands:
+      - echo "Deploying to Lambda Function..."
+      - aws lambda update-function-code --function-name Media-Service --zip-file fileb://media_service_build_package.zip
+      - echo "Lambda Deployed"
+      - layer_arn=$(aws lambda publish-layer-version --layer-name media-service-dependencies --zip-file fileb://dependency_layer.zip --output text --query 'LayerVersionArn')
+      - echo "Layer Created"
+      - aws lambda update-function-configuration --function-name Media-Service --layers $layer_arn
+      - echo "Layer added"
