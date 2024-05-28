@@ -7,49 +7,56 @@ import json
 s3_client = boto3.client('s3')
 
 # Constants (loaded from environment variables)
-MEDIA_BUCKET_NAME = os.environ['MEDIA_BUCKET_NAME']
-DB_HOST = os.environ['DB_HOST']
-DB_USER = os.environ['DB_USER']
-DB_PASSWORD = os.environ['DB_PASSWORD']
-DB_NAME = os.environ['DB_NAME']
+MEDIA_BUCKET_NAME = 'car-network-media-bucket '
+DB_HOST = 'car-network-db.c5kgayasi5x2.us-east-1.rds.amazonaws.com'
+DB_USER = 'admin'
+DB_PASSWORD = 'FrostGaming1!'
+DB_NAME = 'media_metadata'
 
 def lambda_handler(event, context):
     try: 
-        request_body = json.loads(event['body'])
-        media_key = request_body.get('media_key')
-        post_id = request_body.get('post_id')
-        user_id = request_body.get('user_id')
-
-        if not media_key or not post_id or not user_id:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({'error': 'Missing required parameters'})
-            }
-
-        # Extract metadata and generate download URL
-        metadata = get_media_metadata(media_key)
-        download_url = generate_download_url(media_key)
-
-        # Save metadata to the database
-        save_media_metadata(post_id, user_id, media_key, metadata, download_url)
-
-        return {
-            'statusCode': 200,
-            'body': json.dumps({'message': 'Media processed successfully'})
-        }
+        http_method = event['httpMethod']
+        
+        if http_method == "POST":
+            return process_media(event)
 
     except Exception as e:
         return {
             'statusCode': 500,
             'body': json.dumps({'error': str(e)})
         }
+        
+def process_media(event):
+    request_body = json.loads(event['body'])
+    media_key = request_body.get('media_key')
+    post_id = request_body.get('post_id')
+    user_id = request_body.get('user_id')
+
+    if not media_key or not post_id or not user_id:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': 'Missing required parameters'})
+        }
+
+    # Extract metadata and generate download URL
+    metadata = get_media_metadata(media_key)
+    download_url = generate_download_url(media_key)
+
+    # Save metadata to the database
+    save_media_metadata(post_id, user_id, media_key, metadata, download_url)
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps({'message': 'Media processed successfully'})
+    }
 
 def get_media_metadata(media_key):
-    """Extract metadata from the media file."""
-    # Implement metadata extraction logic here
+    response = s3_client.head_object(Bucket=MEDIA_BUCKET_NAME, Key=media_key)
     metadata = {
-        'size': 12345,  # Example size in bytes
-        'type': 'image/jpeg'  # Example media type
+        'title': media_key.split('/')[-1],
+        'size': response['ContentLength'],
+        'filetype': response['ContentType'],
+        # Add other relevant metadata extraction here
     }
     return metadata
 
@@ -74,9 +81,9 @@ def save_media_metadata(post_id, user_id, media_key, metadata, download_url):
                                  database=DB_NAME)
     try:
         with connection.cursor() as cursor:
-            sql = """INSERT INTO media_metadata (post_id, user_id, media_key, size, type, download_url)
+            sql = """INSERT INTO media_metadata (user_id, post_id, media_key, download_url, size, type)
                      VALUES (%s, %s, %s, %s, %s, %s)"""
-            cursor.execute(sql, (post_id, user_id, media_key, metadata['size'], metadata['type'], download_url))
+            cursor.execute(sql, ( user_id, post_id, media_key, download_url, metadata['size'], metadata['type']))
         connection.commit()
     except Exception as e:
         connection.rollback()
