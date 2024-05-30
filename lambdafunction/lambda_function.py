@@ -21,6 +21,7 @@ def lambda_handler(event, context):
             return process_media(event)
 
     except Exception as e:
+
         return {
             'statusCode': 500,
             'body': json.dumps({'error': str(e)})
@@ -42,8 +43,12 @@ def process_media(event):
     metadata = get_media_metadata(media_key)
     download_url = generate_download_url(media_key)
 
+    print("Extracted Meta Data, got download url")
+
     # Save metadata to the database
     save_media_metadata(post_id, user_id, media_key, metadata, download_url)
+
+    print("Saved to db")
 
     return {
         'statusCode': 200,
@@ -51,8 +56,10 @@ def process_media(event):
     }
 
 def get_media_metadata(media_key):
+
     response = s3_client.head_object(Bucket=MEDIA_BUCKET_NAME, Key=media_key)
     print(response)
+
     metadata = {
         'title': media_key.split('/')[-1],
         'size': response['ContentLength'],
@@ -64,11 +71,13 @@ def get_media_metadata(media_key):
 def generate_download_url(media_key, expiration=3600):
     """Generate a download URL for the media file."""
     try:
+
         response = s3_client.generate_presigned_url(
             'get_object',
             Params={'Bucket': MEDIA_BUCKET_NAME, 'Key': media_key},
             ExpiresIn=expiration
         )
+
         return response
     except Exception as e:
         print(f"Error generating download URL: {e}")
@@ -88,7 +97,7 @@ def save_media_metadata(post_id, user_id, media_key, metadata, download_url):
         connection.commit()
     except Exception as e:
         connection.rollback()
-        print(str(e))
+        print("Error saving got db: ", str(e))
         raise e
     finally:
         connection.close()
