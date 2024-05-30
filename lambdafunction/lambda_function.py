@@ -52,10 +52,11 @@ def process_media(event):
 
 def get_media_metadata(media_key):
     response = s3_client.head_object(Bucket=MEDIA_BUCKET_NAME, Key=media_key)
+    print(response)
     metadata = {
         'title': media_key.split('/')[-1],
         'size': response['ContentLength'],
-        'filetype': response['ContentType'],
+        'type': response['ContentType'],
         # Add other relevant metadata extraction here
     }
     return metadata
