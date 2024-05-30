@@ -7,7 +7,7 @@ import json
 s3_client = boto3.client('s3')
 
 # Constants (loaded from environment variables)
-MEDIA_BUCKET_NAME = 'car-network-media-bucket '
+MEDIA_BUCKET_NAME = 'car-network-media-bucket'
 DB_HOST = 'car-network-db.c5kgayasi5x2.us-east-1.rds.amazonaws.com'
 DB_USER = 'admin'
 DB_PASSWORD = 'FrostGaming1!'
