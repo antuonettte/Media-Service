@@ -24,16 +24,24 @@ def lambda_handler(event, context):
     logger.info("Received event: %s", event)
     try:
         http_method = event['httpMethod']
-        if http_method == "POST":
-            
-            return process_media(event)
-        elif http_method == "GET":
-            return get_media_metadata_for_post(event)
-        else:
-            return {
-                'statusCode': 405,
-                'body': json.dumps({'error': 'Method not allowed'})
-            }
+        path = event['path']
+        if path == "/media":
+            logger.info('/media methods')
+            if http_method == "POST":
+                return process_media(event)
+                
+            elif http_method == "GET":
+                return get_media_metadata_for_post(event)
+            else:
+                return {
+                    'statusCode': 405,
+                    'body': json.dumps({'error': 'Method not allowed'})
+                }
+                
+        elif path == "/media/update-url":
+            if http_method == "PATCH":
+                return update_media_url_in_database(event)
+                
     except Exception as e:
         logger.error("Error processing request: %s", str(e))
         return {
@@ -95,6 +103,42 @@ def get_media_metadata(media_key):
     except Exception as e:
         logger.error("Error getting media metadata: %s", str(e))
         raise e
+        
+def update_media_url_in_database(event):
+    logger.info("Getting data from event")
+    request_body = json.loads(event['body'])
+    media_key = request_body.get('media_key')
+    post_id = request_body.get('post_id')
+    
+    logger.info("Generating new url")
+    new_url = generate_download_url(media_key)
+    
+    logger.info("Connecting to db")
+    connection = pymysql.connect(host=DB_HOST,
+                                 user=DB_USER,
+                                 password=DB_PASSWORD,
+                                 database=DB_NAME)
+    try:
+        logger.info("Updating DB Tables")
+        with connection.cursor() as cursor:
+            sql = "UPDATE media_metadata SET url = %s WHERE post_id = %s AND media_key = %s"
+            cursor.execute(sql, (new_url, post_id, media_key))
+        connection.commit()
+        return {
+        "statusCode" : 200,
+        "body": json.dumps({'message' : 'Download URL Successfully updated', "New URL": new_url})
+    }
+    except Exception as e:
+        connection.rollback()
+        logger.error(f"Error updating media URL in database: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({ "error" : str(e) })
+        }
+    finally:
+        connection.close()
+        
+    
 
 def generate_download_url(media_key, expiration=604800):  # 604800 seconds = 7 days
     """Generate a download URL for the media file."""
@@ -141,6 +185,8 @@ def get_media_metadata_for_post(event):
     try:
         post_id = event['queryStringParameters'].get('post_id')
         
+        logger.info(post_id)
+        
         if not post_id:
             return {
                 'statusCode': 400,
@@ -152,11 +198,15 @@ def get_media_metadata_for_post(event):
                                      password=DB_PASSWORD,
                                      database=DB_NAME)
         try:
+            logger.info("Trying to fetch all results")
             with connection.cursor() as cursor:
                 sql = "SELECT user_id, post_id, s3_key, url, size, type FROM media_metadata WHERE post_id = %s"
-                cursor.execute(sql, (post_id,))
+                
+                cursor.execute(sql, (post_id))
                 result = cursor.fetchall()
                 metadata_list = []
+                logger.info(result)
+                
                 for row in result:
                     metadata = {
                         'user_id': row[0],
