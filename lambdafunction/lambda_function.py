@@ -4,17 +4,19 @@ import pymysql
 import os
 import json
 import logging
+import time
+import os
 
 # Initialize AWS clients
 
 s3_client = boto3.client('s3')
 
 # Constants (loaded from environment variables)
-MEDIA_BUCKET_NAME = 'car-network-media-bucket'
-DB_HOST = 'car-network-db.c5kgayasi5x2.us-east-1.rds.amazonaws.com'
-DB_USER = 'admin'
-DB_PASSWORD = 'FrostGaming1!'
-DB_NAME = 'media_metadata_db'
+MEDIA_BUCKET_NAME = os.environ['MEDIA_BUCKET_NAME']
+DB_HOST = os.environ['DB_HOST']
+DB_USER = os.environ['DB_USER']
+DB_PASSWORD = os.environ['DB_PASSWORD']
+DB_NAME = os.environ['DB_NAME']
 
 # Configure logging
 logger = logging.getLogger()
@@ -60,6 +62,11 @@ def process_media(event):
         if not media_key or not post_id or not user_id:
             return {
                 'statusCode': 400,
+                'headers': {
+                      "Access-Control-Allow-Origin": "*", 
+                      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                      "Access-Control-Allow-Credentials": 'true',
+                    },
                 'body': json.dumps({'error': 'Missing required parameters'})
             }
 
@@ -68,25 +75,44 @@ def process_media(event):
         metadata = get_media_metadata(media_key)
 
         logger.info("Getting Download URl")
-        download_url = generate_download_url(media_key)
+        download_url_object = generate_download_url(media_key)
+        
+        download_url = download_url_object['url']
+        expiresAt = download_url_object['expiresAt']
+        
 
         if not download_url:
             return {
                 'statusCode': 500,
+                'headers': {
+                      "Access-Control-Allow-Origin": "*", 
+                      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                      "Access-Control-Allow-Credentials": 'true',
+                    },
                 'body': json.dumps({'error': 'Failed to generate download URL'})
             }
         logger.info("Saving meta data to database")
         # Save metadata to the database
-        save_media_metadata(post_id, user_id, media_key, metadata, download_url)
+        save_media_metadata(post_id, user_id, media_key, metadata, download_url, expiresAt)
 
         return {
             'statusCode': 200,
-            'body': json.dumps({'message': 'Media processed successfully'})
+            'headers': {
+                      "Access-Control-Allow-Origin": "*", 
+                      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                      "Access-Control-Allow-Credentials": 'true',
+                    },
+            'body': json.dumps({'message': 'Media processed successfully', 'url': download_url, 'expiresAt': expiresAt})
         }
     except Exception as e:
         logger.error("Error processing media: %s", str(e))
         return {
             'statusCode': 500,
+            'headers': {
+                      "Access-Control-Allow-Origin": "*", 
+                      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                      "Access-Control-Allow-Credentials": 'true',
+                    },
             'body': json.dumps({'error': str(e)})
         }
 
@@ -111,8 +137,10 @@ def update_media_url_in_database(event):
     post_id = request_body.get('post_id')
     
     logger.info("Generating new url")
-    new_url = generate_download_url(media_key)
-    
+    new_url_object = generate_download_url(media_key, 43200)
+    new_url= new_url_object['url']
+    expiresAt = new_url_object['expiresAt']
+    logger.info(new_url_object)
     logger.info("Connecting to db")
     connection = pymysql.connect(host=DB_HOST,
                                  user=DB_USER,
@@ -121,12 +149,18 @@ def update_media_url_in_database(event):
     try:
         logger.info("Updating DB Tables")
         with connection.cursor() as cursor:
-            sql = "UPDATE media_metadata SET url = %s WHERE post_id = %s AND media_key = %s"
-            cursor.execute(sql, (new_url, post_id, media_key))
+            sql = "UPDATE media_metadata SET url = %s,  expiresAt = %s WHERE post_id = %s AND s3_key = %s"
+            cursor.execute(sql, (new_url, expiresAt, post_id, media_key))
+            logger.info(cursor.fetchall())
         connection.commit()
         return {
         "statusCode" : 200,
-        "body": json.dumps({'message' : 'Download URL Successfully updated', "New URL": new_url})
+        'headers': {
+                      "Access-Control-Allow-Origin": "*", 
+                      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                      "Access-Control-Allow-Credentials": 'true',
+                    },
+        "body": json.dumps({'message' : 'Download URL Successfully updated', "New URL": new_url, "ExpiresAt": expiresAt})
     }
     except Exception as e:
         connection.rollback()
@@ -140,7 +174,7 @@ def update_media_url_in_database(event):
         
     
 
-def generate_download_url(media_key, expiration=604800):  # 604800 seconds = 7 days
+def generate_download_url(media_key, expiration=43200):
     """Generate a download URL for the media file."""
     try:
         # Extract the file name from the media key
@@ -154,15 +188,21 @@ def generate_download_url(media_key, expiration=604800):  # 604800 seconds = 7 d
                 'Key': media_key,
                 'ResponseContentDisposition': f'attachment; filename={file_name}'
             },
-            ExpiresIn=expiration
+            ExpiresIn=43200
         )
+        
+        expiration_timestamp = int(time.time()) + expiration
+
         logger.info("Generated presigned URL: %s", response)
-        return response
+        return {
+            'url': response,
+            'expiresAt': expiration_timestamp
+        }
     except Exception as e:
         logger.error("Error generating download URL: %s", str(e))
         return None
 
-def save_media_metadata(post_id, user_id, media_key, metadata, download_url):
+def save_media_metadata(post_id, user_id, media_key, metadata, download_url, expiresAt):
     
     connection = pymysql.connect(host=DB_HOST,
                                  user=DB_USER,
@@ -170,9 +210,9 @@ def save_media_metadata(post_id, user_id, media_key, metadata, download_url):
                                  database=DB_NAME)
     try:
         with connection.cursor() as cursor:
-            sql = """INSERT INTO media_metadata (user_id, post_id, s3_key, url, size, type)
-                     VALUES (%s, %s, %s, %s, %s, %s)"""
-            cursor.execute(sql, (user_id, post_id, media_key, download_url, metadata['size'], metadata['type']))
+            sql = """INSERT INTO media_metadata (user_id, post_id, s3_key, url, size, type, expiresAt)
+                     VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(sql, (user_id, post_id, media_key, download_url, metadata['size'], metadata['type'], expiresAt))
         connection.commit()
     except Exception as e:
         connection.rollback()
@@ -200,7 +240,7 @@ def get_media_metadata_for_post(event):
         try:
             logger.info("Trying to fetch all results")
             with connection.cursor() as cursor:
-                sql = "SELECT user_id, post_id, s3_key, url, size, type FROM media_metadata WHERE post_id = %s"
+                sql = "SELECT user_id, post_id, s3_key, url, size, type, expiresAt FROM media_metadata WHERE post_id = %s"
                 
                 cursor.execute(sql, (post_id))
                 result = cursor.fetchall()
@@ -214,7 +254,8 @@ def get_media_metadata_for_post(event):
                         's3_key': row[2],
                         'url': row[3],
                         'size': row[4],
-                        'type': row[5]
+                        'type': row[5],
+                        'expiresAt': row[6]
                     }
                     metadata_list.append(metadata)
             return {
